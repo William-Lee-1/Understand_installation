@@ -1,0 +1,50 @@
+#This script is designed to run with Understand - CodeCheck
+use base qw(Understand::Codecheck);
+use strict;
+
+
+use constant ERR1 => 'Violation: object "%1" should be local to function "%2".';
+
+sub register_tr_text {
+	my $check = shift;
+	$check->add_tr_text(ERR1);
+}
+
+sub name { 'Objects shall be local if only accessed from one function.' }
+
+sub description { 'Objects shall be defined at block scope if they are only accessed from within a single function.' }
+
+sub detailed_description { <<'END_DESC'
+The scope of objects shall be restricted to functions where possible. File scope shall only be used where objects need to have either internal or external linkage. Where objects are declared at file scope Rule 8.10 applies. It is considered good practice to avoid making identifiers global except where necessary. Whether objects are declared at the outermost or innermost block is largely a matter of style. "Accessing" means using the identifier to read from, write to, or take the address of the object.
+END_DESC
+}
+
+sub test_language {
+	my $language = shift;
+	return $language eq 'C++';
+}
+
+sub test_entity { 1 }
+
+sub test_global { 0 }
+
+sub define_options { }
+
+
+sub check {
+	my $check = shift;
+	my $file = shift;
+	return unless $file->kind->check('file');
+	
+	foreach my $ref ($file->filerefs('define', 'object', 0)) {
+		my $ent = $ref->ent;
+		
+		my @funcs = map { $_->ent } $ent->refs('', 'function', 1);
+		
+		if (1 == @funcs && $ref->scope->id ne $funcs[0]->id) {
+			$check->violation($ent, $file, $ref->line, $ref->column, ERR1, $ent->name, $funcs[0]->longname);
+		}
+	}
+	
+	return;
+}

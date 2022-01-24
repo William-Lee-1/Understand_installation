@@ -1,0 +1,66 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Extern %2 declared %1 times';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub name { return "8.8 An external object or function shall be declared in one and only one file";}
+
+sub description { return "8.8 (Required) An external object or function shall be declared in one and only one file";}
+
+sub detailed_description { return <<"END_DESC"
+Normally this will mean declaring an external identifier in a header file, that will be included in
+any file where the identifier is defined or used. For example:
+  extern int16_t a;
+  in featureX.h, then to define a:
+  #include <featureX.h>
+  int16_t a = 0;
+There may be one or there may be many header files in a project, but each external object or
+function shall only be declared in one header file.
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 0;}
+
+sub test_global { return 1;}
+
+sub define_options{}
+
+sub check {
+  my $check = shift; 
+  my @files = $check->db->ents("file ~unknown ~unresolved");
+  my %objects;
+  foreach my $file(@files){
+    next unless($file->filerefs("Declarein"));
+    my $lexer = $file->lexer;
+    next unless $lexer;
+    my $findEnt = 0;
+    foreach my $lexeme ($lexer->lexemes()) {
+      if ($lexeme->text eq "extern" && $lexeme->token eq "Keyword"){
+        $findEnt = 1;
+        #$check->violation($file,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1); 
+      }elsif($findEnt && $lexeme->ent && $lexeme->ref->kind->check("Declarein")){       
+        $objects{$lexeme->ent->id} ++;
+        $findEnt=0;
+      }
+    }
+  }
+  foreach my $id(keys %objects){
+    if($objects{$id} > 1){
+      my $ent = $check->db->ent_from_id($id);
+      my $ref = $ent->ref("declarein");
+      $check->violation($ent,$ref->file,$ref->line,$ref->column,ERR1,$objects{$id},$ent->name); 
+    }
+  }
+}

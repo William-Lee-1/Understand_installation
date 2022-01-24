@@ -1,0 +1,110 @@
+use base ("Understand::Graph::Gv");
+use strict;
+
+sub name { return "Instantiation"; }
+
+sub test_entity {
+	my $entity = shift;
+
+	if ($entity->kind->check("vhdl entity,vhdl architecture")) {
+		return 1;
+	} else {
+		return -1;
+	}
+}
+
+sub test_global { return -1; }
+
+sub init {
+	my $graph = shift;
+	$graph->options->define("Show Count",["On","Off"],"Off");
+}
+
+sub do_load {
+	my $graph  = shift;
+	my $entity = shift;
+	
+	my $count = $graph->options->lookup("Show Count") eq "On";
+	
+	$graph->default("rankdir","LR","graph");
+	$graph->default("color","blue","node");
+	$graph->default("shape","record","node");
+	$graph->default("color","#CC0044","edge");
+	
+	my %nodes = ();
+	if ($entity->kind->check("architecture")) {
+		(my $ent) = $entity->ents("implement");
+		draw_arch_tree($graph,$ent,$entity,\%nodes,$count);
+	} else {
+		draw_ent_tree($graph,$entity,\%nodes,$count);
+	}
+}
+
+sub draw_ent_tree {
+	my $graph = shift;
+	my $ent   = shift;
+	my $nodes = shift;
+	my $count = shift;
+	
+	my @result;
+	if (exists($nodes->{$ent->id})) {
+		push(@result,$nodes->{$ent->id});
+		return \@result;
+	}
+	
+	if ($ent->kind->check("unresolved,unknown,component")) {
+		my $node = $graph->node($ent->longname,$ent->name,$ent);
+		$node->set("shape","octagon");
+		$node->set("color","gray");
+		$nodes->{$ent->id} = $node;
+		push(@result,$node);
+	} else {
+		foreach my $arch ($ent->ents("implementby")) {
+			push(@result,draw_arch_tree($graph,$ent,$arch,$nodes,$count));
+		}
+	}
+	
+	return \@result;
+}
+
+sub draw_arch_tree {
+	my $graph = shift;
+	my $ent   = shift;
+	my $arch  = shift;
+	my $nodes = shift;
+	my $count = shift;
+	
+	if (exists($nodes->{$arch->id})) {
+		return $nodes->{$arch->id};
+	}
+	
+	my $name = $ent->longname."@".$arch->longname;
+	my $label = $ent->name."|".$arch->name;
+	my $node = $graph->node($name,$label,$ent);
+	$nodes->{$arch->id} = $node;
+	
+	foreach my $comp ($arch->ents("instantiate")) {
+		my $edge_label = grep {$_->ent == $comp} $arch->refs("instantiate");
+		my @bound_ents = $comp->ents("bind","entity");
+		if ($comp->kind->check("entity") || !@bound_ents) {
+			# direct entity instantiation
+			# unbound component instantiation
+			my $children = draw_ent_tree($graph,$comp,$nodes,$count);
+			foreach my $child (@$children) {
+				my $edge = $graph->edge($node,$child);
+				$edge->set("label",$edge_label) if $count;
+			}
+		} else {
+			# component instantiation
+			foreach my $bound_ent (@bound_ents) {
+				my $children = draw_ent_tree($graph,$bound_ent,$nodes,$count);
+				foreach my $child (@$children) {
+					my $edge = $graph->edge($node,$child);
+					$edge->set("label",$edge_label) if $count;
+				}
+			}
+		}
+	}
+	
+	return $node;
+}

@@ -1,0 +1,280 @@
+our $forward;
+our $inverse;
+our $forwardRel;
+our $inverseRel;
+our $result;
+our %drawnedge;
+
+use base ("Understand::Graph::Gv");
+use strict;
+
+sub name { return "Butterfly"; }
+
+sub test_entity {
+    my $entity = shift;
+
+	if ($entity->kind->check("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
+		."c function,"
+		."cobol program,"
+		."csharp method,"
+		."fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+		."java method,"
+		."jovial file, jovial subroutine,"
+		."pascal compunit, pascal function, pascal procedure,"
+		."vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+    ."php function")) {
+		$forward = "Call";
+		$forwardRel = "ada call ~dispatch,"
+		."c call ~virtual, c use ptr,"
+		."cobol call,"
+		."csharp call ~virtual, csharp use ptr,"
+		."fortran call,"
+		."java call,"
+		."jovial call, jovial asm use,"
+		."pascal call ~virtual,"
+		."vhdl call,"
+    ."php call";
+		$inverse = "Callby";
+		$inverseRel = "ada callby,"
+		."c callby ~inactive, c useby ptr,"
+		."cobol callby,"
+		."csharp callby, csharp useby ptr,"
+		."fortran callby,"
+		."java callby,"
+		."jovial callby, jovial asm useby,"
+		."pascal callby,"
+		."vhdl callby,"
+    ."php callby";
+		$result  = 1;
+	} elsif ($entity->kind->check("csharp class, csharp struct,c class, c struct, c union")) {
+		$forward = "Derive";
+		$forwardRel ="derive";
+		$inverse = "Base";
+		$inverseRel="base";
+		$result  = 1;
+	}elsif ($entity->kind->check("pascal class, pascal interface,java class ~anonymous, java interface")) {
+		$forward = "Extended By";
+		$forwardRel ="derive,extendby ~implicit";
+		$inverse = "Extends";
+		$inverseRel="derivefrom,extend ~implicit";
+		$result  = 1;
+	}elsif ($entity->kind->check("ada type")) {
+		$forward = "Derive";
+		$forwardRel ="derive";
+		$inverse = "Derive From";
+		$inverseRel="derivefrom";
+		$result  = 1;
+	}elsif ($entity->kind->check("c file, fortran file, pascal file")) {
+		$forward = "Include";
+		$forwardRel = "include ~inactive";
+		$inverse = "Includeby";
+		$inverseRel= "includeby ~inactive";
+		$result = 1;
+	}elsif ($entity->kind->check("vhdl entity,vhdl architecture,vhdl package,vhdl configuration")) {
+		$forward = "Use";
+		$forwardRel = "vhdl use name";
+		$inverse = "Useby";
+		$inverseRel= "vhdl useby name";
+		$result = 1;
+  } elsif ($entity->kind->check("cobol paragraph, cobol section")) {
+    $forward = "Perform";
+    $forwardRel = "cobol perform,cobol goto";
+    $inverse = "Performby";
+    $inverseRel = "cobol performby,cobol gotoby";
+    $result = 1;
+	} else {
+		$result  = -1;
+	}
+
+  return $result;
+}
+
+sub test_global { return -1; }
+
+sub init {
+  my $graph = shift;
+
+  $graph->options->define( "$forward Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3" );
+  $graph->options->define( "$inverse Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3" );
+  $graph->options->define("Name", ["Shortname", "Fullname", "None(Overview Mode)"], "Shortname");
+  $graph->options->define("File Name",["Shortname","Fullname","Relative","None"],"None");
+  $graph->options->define("Unresolved",["On","Off"],"On");
+  $graph->options->define("Random Edge Color",["On","Off"],"Off");
+  $graph->options->define("Virtual Calls",["On","Off"],"Off") if $forward eq "Call";
+}
+
+sub do_load {
+  my $graph  = shift;
+  my $entity = shift;
+
+  $graph->default("rankdir","LR","graph");
+  $graph->default("color","blue","node");
+  $graph->default("shape","box","node");
+  $graph->default("color","#CC0044","edge");
+
+  my %seen=();
+  %drawnedge = ();
+  my $id = 0;
+  draw_tree( $graph, $entity, \%seen,\$id, 0, $forward, 1 );
+  %seen=();
+  draw_tree( $graph, $entity, \%seen,\$id, 0, $inverse, 0 );
+}
+
+sub draw_tree {
+  my $graph   = shift;
+  my $ent     = shift;
+  my $seen    = shift;
+  my $id      = shift;
+  my $depth   = shift;
+  my $type    = shift;
+  my $dir     = shift;
+
+  return if $depth > $graph->options->lookup( $type . " Depth" );
+
+  my $typelist = $inverseRel;
+  $typelist = $forwardRel if ($type eq $forward);
+
+  # Make a local copy of seen functions.
+  my %seen = %$seen;
+  $seen{ $ent->id }++;
+
+  # Draw the current function.
+  my $unique_id = $$id++;
+  $unique_id = 0 if $depth == 0;
+  my $printName = " ";
+
+  $printName = $ent->longname if $graph->options->lookup("Name") eq "Fullname";
+  $printName = $ent->name if $graph->options->lookup("Name") eq "Shortname";
+  my $hideUnresolved = $ent->name if $graph->options->lookup("Unresolved") eq "Off";
+  my $randomEdge = $ent->name if $graph->options->lookup("Random Edge Color") eq "On";
+
+
+  my $filenameopt = $graph->options->lookup("File Name");
+  my $deffile = $ent->ref("definein,declarein");
+  if ($deffile && $filenameopt ne "None" && ! $ent->kind->check("file")){
+    $printName .= "\n".$deffile->file->name if $filenameopt eq "Shortname";
+    $printName .= "\n".$deffile ->file->longname if $filenameopt eq "Fullname";
+    $printName .= "\n".$deffile->file->relname if $filenameopt eq "Relative";
+	}
+	return if$hideUnresolved && $ent->kind->check("unresolved,unknown,undefined");	
+	
+  my $node = $graph->node( $unique_id, $printName, $ent );
+  $node->set( "color", "red" ) if $depth == 0;
+  if ($ent->kind->check("unresolved,unknown,undefined")){
+    $node->set( "shape","octagon");
+    $node->set( "color","gray");
+  }
+  
+  
+  # Draw each of the children recursively.
+  my @refs =$ent->refs($typelist,,1);
+  
+  my $jOverride = $ent->ref("Java Override");
+  if ($jOverride){
+    push @refs, $jOverride->ent->refs($typelist,,1);
+  }
+  
+  if ($ent->kind->check("cobol section")) {
+    # Add refs from child paragraphs.
+    foreach my $paragraph ($ent->ents("define", "paragraph")) {
+      push @refs, $paragraph->refs($typelist,,1);
+    }
+  } elsif ($ent->kind->check("cobol paragraph")) {
+    # Add refs to parent sections.
+    foreach my $section ($ent->ents("definein", "section")) {
+      push @refs, $section->refs($typelist,,1);
+    }
+  }
+  
+  foreach my $childRef (sort{$a->line <=> $b->line;} @refs ) {
+    my $child = $childRef->ent;
+    if ( !exists( $seen{ $child->id } ) ) {
+      my $child_node = draw_tree( $graph, $child,\%seen,$id,$depth + 1, $type, $dir );
+      if ($child_node && ! $drawnedge{$ent->id}{$child->id}) {
+        if ($dir) {
+          my $edge = $graph->edge($node, $child_node );
+          $edge->set("color",randomColor()) if $randomEdge;
+          $drawnedge{$ent->id}{$child->id}=1;
+        }elsif(! $drawnedge{$child->id}{$ent->id}) {
+          my $edge = $graph->edge($child_node, $node);
+          $edge->set("color",randomColor()) if $randomEdge;
+          $drawnedge{$child->id}{$ent->id}=1;
+        }
+      }
+    } 
+  }
+  
+  
+  if($graph->options->lookup("Virtual Calls") eq "On"){
+  
+    if ($dir &&  ! $drawnedge{$ent->id}{$ent->id."Vir"}){
+      my @virtuals = $ent->refs("call virtual","function, method",1);
+      my $virNode;
+      if(@virtuals){
+        $virNode = $graph->node( $ent->id."Vir", "Virtual");
+        $virNode->set( "shape", "plaintext" );
+        $virNode->set( "style","bold");
+        my $edge = $graph->edge($node, $virNode );
+        $edge->set("color",randomColor()) if $randomEdge;
+        $drawnedge{$ent->id}{$ent->id."Vir"}=1;
+      }
+      my @virtEnts = @virtuals;
+      foreach my $childRef(@virtuals){
+        foreach my $orRef($childRef->ent->refs("overriddenby","",1)){
+          push(@virtEnts,$orRef);
+        }    
+      }
+      foreach my $childRef(@virtEnts){    
+       my $child = $childRef->ent;
+        if ( !exists( $seen{ $child->id } ) ) {
+          my $child_node = draw_tree( $graph, $child,\%seen,$id,$depth + 2, $type, $dir );
+          if ($child_node && ! $drawnedge{$ent->id."Vir"}{$child->id}) {
+              my $edge = $graph->edge($virNode, $child_node );
+              $edge->set("color",randomColor()) if $randomEdge;
+              $drawnedge{$ent->id."Vir"}{$child->id}=1;
+          }
+        } 
+      }
+    }elsif(!$dir &&  ! $drawnedge{$ent->id."Vir"}{$ent->id}){
+      my @virtEnts;
+      foreach my $orRef($ent->refs("overrides","",1)){
+        my @virtuals = $orRef->ent->refs("callby virtual","function, method",1);
+        push(@virtEnts,@virtuals);
+      }    
+    
+      my $virNode;
+      if(@virtEnts){
+        $virNode = $graph->node( $ent->id."Vir", "Virtual");
+        $virNode->set( "shape", "plaintext" );
+        $virNode->set( "style","bold");
+        my $edge = $graph->edge($virNode,$node );
+        $edge->set("color",randomColor()) if $randomEdge;
+        $drawnedge{$ent->id."Vir"}{$ent->id}=1;
+      }
+      
+      foreach my $childRef(@virtEnts){    
+       my $child = $childRef->ent;
+        if ( !exists( $seen{ $child->id } ) ) {
+          my $child_node = draw_tree( $graph, $child,\%seen,$id,$depth + 2, $type, $dir );
+          if ($child_node && ! $drawnedge{$child->id}{$ent->id."Vir"}) {
+            my $edge = $graph->edge($child_node, $virNode);
+            $edge->set("color",randomColor()) if $randomEdge;
+            $drawnedge{$child->id}{$ent->id}=1;
+          }
+        } 
+      }
+    }
+  }
+  return $node;
+}
+
+sub randomColor{
+	my @ca=('0','3','6','9','C','E');
+	my @bgc=('','','');
+	foreach my $c (@bgc){
+	  my $r=int(rand(6));
+	  $c=$ca[$r].$ca[$r];
+	}
+	my $color = join("",@bgc);
+	return "#".$color;
+}

@@ -1,0 +1,112 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Identifier "%1" possibly hiding outer definition from line %2';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub name { return "Scope Hiding";}
+
+sub description { return "Inner scope identifiers should not hide outer scope identifiers.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b><br>
+Developer confusion can be caused if identifiers are reused in inner and outer scopes.</p>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+sub define_options{}
+
+
+sub check {
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check("file ~unknown ~unresolved");
+  
+  my @ents = $file->filerefs("define","object,parameter",1);
+  my %entNames;
+  $entNames{$_->ent->name}++ for (@ents);
+  my $useLexeme = 0;
+  foreach (keys %entNames){
+    if ($entNames{$_} > 1){
+      $useLexeme=1;
+      last;
+    }
+  }
+  return unless $useLexeme;
+  
+  
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  my $lexeme = $lexer->first;
+  return unless $lexeme;
+  my @empty = ();
+  parse_scope($file,$lexeme,$check,\@empty,\@empty);
+}
+
+sub parse_scope{
+  my ($file,$lexeme, $check, $parentVars, $paramVars) = @_;
+
+  my @localVars;
+  my $startLex = $lexeme;
+  my $depth=1;
+
+  my @parents = @{$parentVars};
+  my @params = @{$paramVars};
+  my @newParams;
+  #First pass, find all the variables at this scope.
+  foreach my $param(@params){
+    foreach my $parentRef (@parents){
+      if($parentRef->scope->name eq $param->ref->scope->name){
+        $check->violation($param->ref->scope,$param->ref->file,$param->ref->line,$param->ref->column,ERR1,$param->ref->scope->name,$parentRef->line);
+      }
+    }
+  }
+  while($lexeme && $depth >= 1){
+    $depth++ if $lexeme->token eq "Punctuation" && $lexeme->text eq "{";
+    $depth-- if $lexeme->token eq "Punctuation" && $lexeme->text eq "}";
+    if($depth == 1 && $lexeme->ref && $lexeme->ref->kind->check("definein") && $lexeme->ref->scope->kind->check("object")){
+      my $hiding =0;
+      foreach my $parentRef (@parents){
+        if($parentRef->scope->name eq $lexeme->ref->scope->name){
+          $check->violation($lexeme->ref->scope,$lexeme->ref->file,$lexeme->ref->line,$lexeme->ref->column,ERR1,$lexeme->ref->scope->name,$parentRef->line);
+          $hiding =1;
+        }
+      }
+      push(@localVars,$lexeme->ref) unless $hiding;
+    }
+    $lexeme= $lexeme->next;
+  }
+
+  #second pass, go into the nested scopes recursivly
+  push(@parents, @localVars);
+  $lexeme = $startLex;
+  $depth =1;
+  
+  while($lexeme && $depth >= 1){
+    if ($depth == 1 && $lexeme->ref && $lexeme->ref->kind->check("definein") && $lexeme->ref->scope->kind->check("parameter")){
+        push(@newParams,$lexeme);
+      }
+    $depth-- if $lexeme->token eq "Punctuation" && $lexeme->text eq "}";
+    if ($lexeme->token eq "Punctuation" && $lexeme->text eq "{"){
+      $lexeme = parse_scope($file,$lexeme->next,$check,\@parents,\@newParams);
+      }
+
+    $lexeme=$lexeme->next if $lexeme;
+  }
+  return $lexeme;
+}

@@ -1,0 +1,60 @@
+use base ("Understand::Codecheck");
+use Understand::Flowchart;
+use strict;
+
+
+sub name {
+	return "Unreachable Code";
+}
+
+sub description {
+	return "Source will not contain Unreachable Code";
+}
+
+sub detailed_description {
+	return "Source will not contain Unreachable Code. If macros are used in the code, you will have more accurate results by checking the option Project->Configure Project->C++ -> Options -> \"Save Macro Expansion Text\" before running this check.";
+}
+
+sub test_language {
+	my $language = shift;
+	return $language =~ /C++|Java|Ada|Fortran/;
+  return 1;
+}
+
+sub test_entity {
+  my $entity = shift;
+  my $result = isValidFlowchartEntity($entity);
+  return $result ? 1 : -1;
+}
+
+sub test_global {
+	return 0;
+}
+
+sub define_option{
+  my $check = shift;
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("file ~dll");
+  
+  my @funcRefs = $file->filerefs("definein, body declarein","c function ~unknown ~unresolved".
+   ",java method ~abstract".
+   ",fortran subroutine, fortran function, fortran main program ~unknown ~unresolved".
+   ",c# method ~abstract".
+   ",vhdl procedure, vhdl function".
+   ",ada procedure, ada function, ada task",1);
+  
+  FUNC:foreach my $funcRef (@funcRefs){
+    my $func = $funcRef->ent;
+    my @nodes = createFlowchart($func,1,0);
+    foreach my $node(@nodes){
+      if ($node->get("unreachable") && $node->get("code") ne "no_op"){
+        $check->violation($func,$file,$node->get("line"),$node->get("column"),"Unreachable Code"); 
+        next FUNC;
+      }
+    }
+  }
+}

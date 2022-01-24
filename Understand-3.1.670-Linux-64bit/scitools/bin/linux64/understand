@@ -1,0 +1,5 @@
+#!/bin/bash
+scriptdir=`dirname $0`
+export LD_LIBRARY_PATH=$scriptdir
+$0.bin "$@"
+

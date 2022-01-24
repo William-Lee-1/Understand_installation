@@ -1,0 +1,133 @@
+
+use base ("Understand::Graph::Gv");
+use Understand::Flowchart;
+use strict;
+
+sub name { return "Control Flow"; }
+
+sub description {
+  return "A plugin for generation of simple flowcharts.";
+}
+
+sub test_entity {
+  my $entity = shift;
+  my $result = isValidFlowchartEntity($entity);
+  return $result ? 1 : -1;
+}
+
+sub test_global { return -1; }
+
+sub init {
+  my $graph = shift;
+
+  $graph->options->define("Collapse", ["Collapse", "Collapse By Block", "None"], "Collapse");
+  $graph->options->define("Cluster By Decision",["On","Off"],"Off");
+  $graph->options->define("Display Code",["On","Off","Unless Comment"],"On");
+  $graph->options->define("Display Comments",["Preceding","Following","Off",],"Off");
+  $graph->options->define("Display Assembly",["On","Off"],"Off");
+  $graph->options->define("Display Entity Name",["On","On with Parameters","Off"],"Off");
+  $graph->options->define("Macro Expansion",["Off","On (\"Save Macro Expansion Text\" must be enabled)"],"Off");
+  $graph->options->define("Align Text",["Left","Center","Right"],"Center");
+}
+
+sub do_load {
+  my $g = shift;
+  my $entity = shift;
+    
+  my $expandmacros    = $g->options->lookup("Macro Expansion") ne "Off";
+  my $collapse        = $g->options->lookup("Collapse");
+  my $preComments     = $g->options->lookup("Display Comments") eq "Preceding";
+  my $postComments    = $g->options->lookup("Display Comments") eq "Following";
+  my $displayCode     = $g->options->lookup("Display Code") eq "On";
+  my $unlessComment   = $g->options->lookup("Display Code") eq "Unless Comment";
+  my $displayAsm      = $g->options->lookup("Display Assembly") eq "On";
+  my $overviewMode    = $g->options->lookup("Overview Mode") eq "On";
+  my $cluster         = $g->options->lookup("Cluster By Decision") eq "On";
+  my $left            = $g->options->lookup("Align Text") eq "Left";
+  my $right            = $g->options->lookup("Align Text") eq "Right";
+  
+
+  $g->default("shape", "box", "node");
+  $g->default("color", "blue", "node");
+  $g->default("color", "black", "edge");
+  $g->default("style", "solid", "edge");
+  $g->default("labeljust", "centered", "node");
+
+
+  my @nodes = createFlowchart($entity,$expandmacros,$collapse);
+  my @graphNodes;
+  my %clusters;
+
+  #Draw the nodes
+  foreach my $node(@nodes){
+    my $nodeid = $node->get("id");
+    my $startName = $g->options->lookup("Display Entity Name");
+    
+    my @decisionTree = split /,/,$node->get("decisionTree");
+    my $prevCluster = $g;
+    if ($cluster){
+      foreach my $clusterID (@decisionTree){
+        my $clustObj;
+        if (! $clusters{$clusterID}){
+          $clustObj = $prevCluster->cluster("cluster".$clusterID,"");
+          $clusters{$clusterID} = $clustObj;
+        }else{
+          $clustObj = $clusters{$clusterID};
+        }
+        $prevCluster=$clustObj;
+      }
+    }
+    my $graphNode = $prevCluster->node($nodeid);
+    
+   
+    $graphNode->sync($node->get("file_ent"), $node->get("line"), 0);
+    
+    #Node Text
+    my $text = " ".$node->get("code") if $displayCode || $unlessComment;
+    if ($nodeid eq 0){
+      $text .= "\n(".$entity->longname.")" if $startName eq "On";
+      $text .= "\n".$entity->longname."(".$entity->parameters.")" if $startName eq "On with Parameters";
+    }
+    $text =~ s/\\l/\\n/g;
+    my $nodeComment;
+    $nodeComment = $node->get("pre_comment")."\n" if $preComments && $node->get("pre_comment");
+    $nodeComment .= $node->get("embedded_comment")."\n" if $node->get("embedded_comment")&& ($postComments || $preComments);
+    $nodeComment .= $node->get("post_comment")."\n" if $postComments && $node->get("post_comment");
+    $text = "" if $unlessComment &&  $nodeComment;
+    if ($postComments){
+        $text = $text. $nodeComment;
+      }else{
+        $text = $nodeComment.$text;
+      }
+    if ($text){
+      my @line = split(/\n|\\n/,$text);
+      foreach (@line){
+        $_ =~ s/^\s*|\s*$//g;
+        $_ = " ".$_;
+      }
+      $text = join('\n',@line)."\\n";
+    }
+    
+    $text =~ s/\\n/\\l/g if $left;
+    $text =~ s/\\n/\\r/g if $right;
+    $graphNode->set("label", $text);
+    $text = "";
+    #Other node properties
+    $graphNode->set("color", $node->get("color")) if $node->get("color");
+    $graphNode->set("shape", $node->get("shape")) if $node->get("shape");
+    $graphNode->set("color", "red") if $node->get("unreachable");
+    $graphNode->set("shape", "box") if $nodeid eq 0;
+    $graphNodes[$nodeid] = $graphNode;
+  }
+  #Draw the edges
+  foreach my $node(@nodes){
+    foreach my $edge ($node->edgeList()){
+      my $srcGraphNode = $graphNodes[$edge->get("source")];
+      my $targetGraphNode = $graphNodes[$edge->get("target")];
+      my $graphEdge = $g->edge($srcGraphNode, $targetGraphNode);
+      $graphEdge->set("color",$edge->get("color"));
+      $graphEdge->set("label",$edge->get("type")) if $postComments || $preComments || $displayCode;
+    }
+  }
+  
+}
